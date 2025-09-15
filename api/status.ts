@@ -23,7 +23,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
   try {
     const status = await kvGet(`status:${sessionId}`);
-    res.status(200).json({ status: status || 'pending' });
+    const image = await kvGet(`image:${sessionId}`);
+    res.status(200).json({ status: status || 'pending', image: image || null });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Internal error' });

